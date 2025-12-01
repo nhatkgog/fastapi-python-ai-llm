@@ -6,7 +6,7 @@ from rapidfuzz import process, fuzz
 import pdfplumber
 import io
 import re
-from text_anonymizer import anonymize
+from text_anonymizer import anonymize, core
 from dotenv import load_dotenv
 import os
 import requests
@@ -45,7 +45,7 @@ MODELS = [
 SPACY_MODEL_PATH = os.path.join(os.getcwd(), "spacy_model")
 
 # Load the spaCy model from the local directory
-nlp = spacy.load(SPACY_MODEL_PATH)
+core.nlp = spacy.load(SPACY_MODEL_PATH)
 
 # Known skills for fuzzy matching
 KNOWN_SKILLS = [
