@@ -1,12 +1,12 @@
+import logging
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.responses import HTMLResponse
 import spacy
-from spacy.matcher import Matcher
-from rapidfuzz import process, fuzz
-import pdfplumber
+import fitz
+import pymupdf4llm
 import io
 import re
-from text_anonymizer import anonymize, core
+import asyncio
 from dotenv import load_dotenv
 import os
 import requests
@@ -14,6 +14,26 @@ import httpx
 import json
 from typing import List
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Define the path to the local spaCy model
+SPACY_MODEL_PATH = os.path.join(os.getcwd(), "spacy_model")
+
+_real_spacy_load = spacy.load
+def custom_load(path, *args, **kwargs):
+    if path == "en_core_web_sm":
+        return _real_spacy_load(SPACY_MODEL_PATH)
+    return _real_spacy_load(path)
+
+spacy.load = custom_load
+# Load the spaCy model from the local directory
+nlp = spacy.load(SPACY_MODEL_PATH)
+
+import text_anonymizer.core
+text_anonymizer.core.nlp = nlp
+
+from text_anonymizer import anonymize
 load_dotenv()
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -40,31 +60,190 @@ MODELS = [
         "x-ai/grok-4.1-fast:free",
     ]
 
-# Load spaCy model
-# Define the path to the local spaCy model
-SPACY_MODEL_PATH = os.path.join(os.getcwd(), "spacy_model")
-
-# Load the spaCy model from the local directory
-core.nlp = spacy.load(SPACY_MODEL_PATH)
-
-# Known skills for fuzzy matching
-KNOWN_SKILLS = [
-    "Python", "JavaScript", "Java", "C++", "C#", "Ruby", "Go", "Swift", "Kotlin",
-    "React", "Angular", "Vuejs", "Nodejs", "Django", "Flask", "Spring",
-    "SQL", "NoSQL", "MongoDB", "PostgreSQL", "MySQL", "Git", "Docker", "Kubernetes",
-    "AWS", "Azure", "Google Cloud", "Terraform", "Jenkins", "CI/CD"
-]
-
 WHITELIST = {
-    # Original entries
-    "FPT University", "Coursera", "English", "Japanese", "Web",
-    "API", "OTP", "Google", "Servlets", "JSP", "Time",
+    # -------------------------
+    # ORIGINAL TERMS
+    # -------------------------
+    "FPT University", "Coursera", "English", "Japanese", "Web", "API", "OTP",
+    "Google", "Servlets", "JSP", "Time", "Business", "Python", "JavaScript",
+    "Java", "C++", "C#", "Ruby", "Go", "Swift", "Kotlin", "React", "Angular",
+    "Vuejs", "Nodejs", "Django", "Flask", "Spring", "SQL", "NoSQL", "MongoDB",
+    "PostgreSQL", "MySQL", "Git", "Docker", "Kubernetes", "AWS", "Azure",
+    "Google Cloud", "Terraform", "Jenkins", "CI/CD", "Critical thinking",
+    "Teamwork", "Software", "Automation", "Engineering", "deliver", "QA",
+    "Quality", "Assurance", "TensorFlow", "PyTorch", "Keras", "GCP", "Linux",
+    "GitHub", "Bitbucket", "Slack", "Zoom", "JIRA", "Confluence", "Redis", "Intern",
+    "UK", "",
 
-    # Extra entries
-    "TensorFlow", "PyTorch", "Keras", "GCP", "Linux", "GitHub",
-    "Bitbucket", "Slack", "Zoom", "JIRA", "Confluence", "Redis"
+    # -------------------------
+    # PROGRAMMING LANGUAGES
+    # -------------------------
+    "TypeScript", "Rust", "PHP", "Perl", "R", "Scala", "Elixir", "Haskell",
+    "Bash", "Shell Script", "MATLAB", "Objective-C", "Fortran", "COBOL",
+    "Solidity", "Dart", "Assembly", "VBA", "Prolog", "Scheme", "Lisp",
+    "F#", "OCaml", "PowerShell", "Shell",
+
+    # -------------------------
+    # FRONTEND
+    # -------------------------
+    "HTML", "CSS", "TailwindCSS", "Bootstrap", "Sass", "Less",
+    "Material UI", "Chakra UI", "Next.js", "Nuxt.js", "Svelte", "SvelteKit",
+    "Webpack", "Vite", "Rollup", "Gulp", "Babel", "ESLint", "Prettier",
+    "Figma", "Responsive Design", "Accessibility", "A11y", "UI", "UX",
+    "Design Systems", "Storybook", "Emotion", "Styled Components",
+    "Redux", "MobX", "Pinia", "Zustand", "Jest", "Vitest", "Cypress",
+    "Playwright", "WebAssembly",
+
+    # -------------------------
+    # BACKEND
+    # -------------------------
+    "Express.js", "FastAPI", "Laravel", "Symfony", "Rails", "ASP.NET",
+    "NestJS", "Hapi", "Koa", "tRPC", "Gin", "Fiber", "Actix", "Phoenix",
+    "GraphQL", "REST", "gRPC", "OpenAPI", "JWT", "OAuth", "WebSockets",
+    "Rate Limiting", "Load Balancing", "Nginx", "Apache", "IIS",
+    "Caching", "Session Management", "Cron", "Queues", "RabbitMQ",
+    "Kafka", "ActiveMQ", "ZeroMQ", "Redis Streams", "Event Sourcing",
+    "CQRS", "Service Mesh", "Istio", "Linkerd",
+
+    # -------------------------
+    # MOBILE DEVELOPMENT
+    # -------------------------
+    "Android", "iOS", "Flutter", "React Native", "SwiftUI",
+    "Jetpack Compose", "Xamarin", "KMM", "Cordova", "Ionic",
+
+    # -------------------------
+    # CLOUD SERVICES (AWS)
+    # -------------------------
+    "EC2", "S3", "RDS", "ECS", "EKS", "Lambda", "DynamoDB", "API Gateway",
+    "CloudWatch", "CloudTrail", "Route53", "IAM", "VPC", "Kinesis",
+    "SNS", "SQS", "Elastic Beanstalk", "Glue", "Athena", "Redshift",
+    "Aurora", "Fargate", "Elasticache", "Lightsail",
+
+    # -------------------------
+    # CLOUD SERVICES (GCP)
+    # -------------------------
+    "Compute Engine", "Cloud Run", "Cloud Functions", "Firestore",
+    "BigTable", "BigQuery", "Cloud SQL", "Pub/Sub", "Dataflow",
+    "Composer", "Anthos", "GKE",
+
+    # -------------------------
+    # CLOUD SERVICES (AZURE)
+    # -------------------------
+    "Azure Functions", "AKS", "App Services", "Cosmos DB", "Blob Storage",
+    "Azure SQL", "Monitor", "DevOps Pipelines", "Service Bus",
+
+    # -------------------------
+    # DEVOPS / INFRASTRUCTURE
+    # -------------------------
+    "CI/CD", "GitOps", "ArgoCD", "FluxCD", "Docker Compose", "Kustomize",
+    "Helm", "Prometheus", "Grafana", "ELK", "EFK", "Zabbix", "Nagios",
+    "Ansible", "Puppet", "Chef", "SaltStack", "Nomad", "Consul",
+    "Vault", "OpenTelemetry", "Jaeger", "Sentry", "PagerDuty",
+    "Splunk", "Datadog", "New Relic", "Dynatrace",
+
+    # -------------------------
+    # DATABASES — SQL + NoSQL + Graph + Time Series
+    # -------------------------
+    "MariaDB", "CockroachDB", "Cassandra", "SQLite", "Firebird",
+    "Oracle", "DB2", "Teradata", "Snowflake",
+    "CouchDB", "RethinkDB", "ArangoDB", "Neo4j", "Dgraph",
+    "TigerGraph", "TimescaleDB", "InfluxDB", "Prometheus TSDB",
+
+    # -------------------------
+    # AI / ML / DATA SCIENCE
+    # -------------------------
+    "Machine Learning", "Deep Learning", "Neural Networks", "Transformers",
+    "LLM", "RNN", "CNN", "GAN", "Autoencoder", "Diffusion Models",
+    "NLP", "Computer Vision", "Reinforcement Learning",
+    "XGBoost", "LightGBM", "CatBoost", "Scikit-Learn",
+    "OpenCV", "NLTK", "spaCy", "HuggingFace", "FastAI",
+    "MLflow", "Kubeflow", "DataRobot", "Vertex AI",
+    "Feature Store", "Model Registry", "ONNX", "Quantization",
+    "Pruning", "Distillation", "Model Serving", "Inference Optimization",
+
+    # -------------------------
+    # CYBERSECURITY
+    # -------------------------
+    "OWASP", "SQL Injection", "XSS", "CSRF", "RCE", "SSRF", "IDOR",
+    "Penetration Testing", "Threat Modeling", "Encryption",
+    "Hashing", "AES", "RSA", "TLS", "SSL", "Kerberos",
+    "Fuzzing", "Burp Suite", "Nmap", "Metasploit", "Wireshark",
+    "Firewall", "WAF", "Antivirus", "EDR", "SIEM", "SOC", "MITRE ATT&CK",
+    "Zero Trust", "Identity Access Management", "IAM", "OAuth2", "SAML",
+
+    # -------------------------
+    # SYSTEM DESIGN & ARCHITECTURE
+    # -------------------------
+    "Load Balancer", "Reverse Proxy", "Sharding", "Replication",
+    "Partitioning", "CAP Theorem", "Consistency", "Durability",
+    "Scalability", "Fault Tolerance", "High Availability",
+    "Distributed Systems", "Leader Election", "Consensus",
+    "Raft", "Paxos", "Gossip Protocol", "Circuit Breaker Pattern",
+    "Bulkhead Pattern", "Rate Limiting", "Throttling",
+    "Service Discovery", "API Gateway", "Edge Computing",
+    "CDN", "Caching Layer", "Event-Driven Architecture",
+    "Message Broker", "Failover", "Autoscaling",
+
+    # -------------------------
+    # NETWORKING
+    # -------------------------
+    "TCP", "UDP", "IP", "DNS", "DHCP", "HTTP", "HTTPS", "FTP", "SSH",
+    "Telnet", "VPN", "Subnetting", "Routing", "Switching",
+    "Load Balancing", "Proxy", "NAT", "Firewall",
+
+    # -------------------------
+    # TESTING & QA
+    # -------------------------
+    "Unit Testing", "Integration Testing", "System Testing",
+    "Acceptance Testing", "Regression Testing", "Smoke Testing",
+    "Sanity Testing", "Performance Testing", "Load Testing",
+    "Stress Testing", "Pen Testing", "API Testing",
+    "Selenium", "Appium", "JUnit", "NUnit", "Mocha", "Chai",
+    "TestNG", "Allure", "Postman", "Newman",
+
+    # -------------------------
+    # PROJECT / PRODUCT / AGILE
+    # -------------------------
+    "Agile", "Scrum", "Kanban", "Waterfall", "Lean", "OKRs",
+    "KPIs", "Sprints", "Backlog", "User Stories",
+    "Acceptance Criteria", "Roadmap", "Stakeholders",
+    "Project Management", "Product Management",
+    "Requirements Engineering", "Risk Management",
+
+    # -------------------------
+    # DEV TOOLS
+    # -------------------------
+    "VS Code", "IntelliJ", "Eclipse", "Android Studio",
+    "Xcode", "PyCharm", "Vim", "Emacs", "Postman",
+    "Fiddler", "Insomnia", "Swagger", "K6",
+
+    # -------------------------
+    # OPERATING SYSTEMS
+    # -------------------------
+    "Windows", "Linux", "macOS", "Ubuntu", "Debian", "Fedora",
+    "Arch Linux", "CentOS", "Red Hat", "Alpine Linux",
+
+    # -------------------------
+    # VIRTUALIZATION / CONTAINERS
+    # -------------------------
+    "VMware", "VirtualBox", "Hyper-V", "KVM",
+    "Docker", "OCI", "runc", "containerd",
+
+    # -------------------------
+    # SOFT SKILLS
+    # -------------------------
+    "Communication", "Leadership", "Problem Solving",
+    "Teamwork", "Adaptability", "Creativity",
+    "Decision Making", "Analytical Thinking",
+
+    # -------------------------
+    # EDUCATIONAL / MISC
+    # -------------------------
+    "Computer Science", "Information Technology", "Algorithms",
+    "Data Structures", "Time Complexity", "Space Complexity",
+    "Systems Analysis", "Software Engineering",
+    "Quality Engineering", "Scripting", "Automation"
 }
-WHITELIST.update(KNOWN_SKILLS)
 
 async def chat_with_fallback(
     message: str,
@@ -96,22 +275,39 @@ async def chat_with_fallback(
 
                 # Extract content (adapt based on API response structure)
                 # Some APIs return `choices` array
-                # print(data)
+                # logging.info(data)
                 return data["choices"][0]["message"]["content"]
 
             except requests.exceptions.RequestException as e:
                 last_exception = e
-                print(f"[Warning] Model {model} attempt {attempt+1} failed: {e}")
+                logging.warning(f"Model {model} attempt {attempt+1} failed: {e}")
                 # Try again up to max_retries
 
-        print(f"[Info] Switching to next model after {max_retries} failed attempts: {model}")
+        logging.info(f"Switching to next model after {max_retries} failed attempts: {model}")
 
     raise RuntimeError(f"All models failed. Last exception: {last_exception}")
 
 def clean_json_string(s: str) -> str:
-    # Extract first {...} block
-    match = re.search(r"\{.*\}", s, re.DOTALL)
-    return match.group(0) if match else s
+    """
+    Extract the first top-level JSON object from a string.
+    Handles nested braces properly.
+    """
+    brace_count = 0
+    start_idx = None
+
+    for idx, char in enumerate(s):
+        if char == '{':
+            if brace_count == 0:
+                start_idx = idx
+            brace_count += 1
+        elif char == '}':
+            brace_count -= 1
+            if brace_count == 0 and start_idx is not None:
+                # Extract substring and return
+                return s[start_idx:idx+1]
+
+    # Fallback: return original string if no JSON found
+    return s
 
 async def parse_cv_to_json(cv_text: str) -> dict:
     """
@@ -177,11 +373,35 @@ Return the result as a **JSON array of strings only**, with no additional text, 
 
 Example format:
 {{
-  "questions" : [
-  "Question 1?",
-  "Question 2?",
-  "Question 3?"
-  ],
+  "questions": [
+    {{
+      "id": "q_001",
+      "type": "type1",
+      "difficulty": "difficulty1",
+      "target_skill": "skill1",
+      "experience_ref": "company1",
+      "question": "question1",
+      "answer_guide": "answer_guide1"
+    }},
+    {{
+      "id": "q_002",
+      "type": "type2",
+      "difficulty": "difficulty2",
+      "target_skill": "skill2",
+      "experience_ref": "company2",
+      "question": "question2",
+      "answer_guide": "answer_guide2"
+    }},
+    {{
+      "id": "...",
+      "type": "...",
+      "difficulty": "...",
+      "target_skill": "...",
+      "experience_ref": "...",
+      "question": "...",
+      "answer_guide": "..."
+    }}
+  ]
 }}
 
 CV Text:
@@ -194,20 +414,22 @@ CV Text:
     try:
         response = await chat_with_fallback(prompt, MODELS)
         response = clean_json_string(response)
-        # For now, we just print the questions. In a real app, we might save them to a database.
-        print(f"[BackgroundTask] Generated Interview Questions:\n{response}")
+        # For now, we just log the questions. In a real app, we might save them to a database.
+        logging.info(f"[BackgroundTask] Generated Interview Questions:\n{response}")
     except Exception as e:
-        print(f"[BackgroundTask] Error generating interview questions: {e}")
+        logging.error(f"[BackgroundTask] Error generating interview questions: {e}")
 
-def extract_text_from_pdf(pdf_content: bytes) -> str:
-    """Extracts text from a PDF file using pdfplumber."""
-    text = ""
-    with pdfplumber.open(io.BytesIO(pdf_content)) as pdf:
-        for page in pdf.pages:
-            page_text = page.extract_text()
-            if page_text:  # some pages may be empty
-                text += page_text + "\n"
-    return text
+async def extract_text_from_pdf(pdf_content: bytes) -> str:
+    """Async wrapper for PyMuPDF Layout parser."""
+    return await asyncio.to_thread(_extract_text_layout_aware, pdf_content)
+
+
+def _extract_text_layout_aware(pdf_content: bytes) -> str:
+    """Extracts structured text (headings, paragraphs) using PyMuPDF-Layout."""
+    doc = fitz.open(stream=pdf_content, filetype="pdf")
+    md = pymupdf4llm.to_markdown(doc)  # Markdown preserves headings, bold, italic, lists
+    doc.close()
+    return md
 
 def anonymize_with_whitelist(text: str, whitelist: set[str]):
     anonymized_text, anonymization_map = anonymize(text)
@@ -219,38 +441,12 @@ def anonymize_with_whitelist(text: str, whitelist: set[str]):
 
     return anonymized_text, anonymization_map
 
-def extract_and_normalize_skills(text: str, known_skills: list[str], threshold: int = 85) -> list[str]:
-    """
-    Extracts entities using spaCy and normalizes them against a list of known skills
-    using fuzzy matching.
-    """
-    doc = nlp(text)
-    
-    # 1. Extract potential skills using spaCy's NER (entities)
-    potential_skills = {ent.text for ent in doc.ents if ent.label_ in ["ORG", "PRODUCT", "WORK_OF_ART", "LANGUAGE"]}
-    
-    # 2. Add any text that matches known skills exactly (case-insensitive)
-    # This helps catch skills spaCy might have missed.
-    text_lower = text.lower()
-    for skill in known_skills:
-        if skill.lower() in text_lower:
-            potential_skills.add(skill)
-
-    # 3. Normalize using fuzzy matching
-    normalized_skills = set()
-    for skill in potential_skills:
-        match = process.extractOne(skill, known_skills, scorer=fuzz.token_set_ratio)
-        if match and match[1] >= threshold:
-            normalized_skills.add(match[0])
-            
-    return sorted(list(normalized_skills))
-
 @app.post("/api/extract-cv")
 async def extract_cv(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     content = await file.read()
 
     if file.filename.endswith(".pdf"):
-        text = extract_text_from_pdf(content)
+        text = await extract_text_from_pdf(content)
     else:
         text = content.decode("utf-8")
 
@@ -259,20 +455,13 @@ async def extract_cv(background_tasks: BackgroundTasks, file: UploadFile = File(
     try:
         cv_json = await parse_cv_to_json(sanitized)
     except Exception as e:
-        print(f"[Error] Failed to parse CV to JSON: {e}")
+        logging.error(f"Failed to parse CV to JSON: {e}")
         cv_json = {"error": f"Failed to parse CV to JSON"}
-
-    # Use spaCy and RapidFuzz to extract and normalize skills as per the document
-    # This overrides or supplements the skills extracted by the LLM
-    skills_from_nlp = extract_and_normalize_skills(sanitized, KNOWN_SKILLS)
-    if "skills" in cv_json and isinstance(cv_json, dict):
-        cv_json["skills"] = skills_from_nlp
 
     # Add background task to run after the response is sent
     background_tasks.add_task(generate_interview_questions, cv_json)
 
     return cv_json
-
 
 @app.get("/api/data")
 def get_sample_data():

@@ -1,0 +1,13 @@
+{
+  "summary": "<short professional summary or objective>",
+  "skills": ["skill1", "skill2", "..."],
+  "languages": ["language1", "language2", "..."],
+  "experiences": [
+    {
+      "job_title": "<Job title>",
+      "company": "<Company name>",
+      "description": "<Brief summary of responsibilities and achievements>"
+    }
+  ],
+  "certifications": ["certification1", "certification2", "..."]
+}
