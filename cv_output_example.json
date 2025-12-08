@@ -1,5 +1,7 @@
 {
-  "summary": "<short professional summary or objective>",
+  "apply_for": {
+    "job_title": "<Desired job title>"
+  },
   "skills": ["skill1", "skill2", "..."],
   "languages": ["language1", "language2", "..."],
   "experiences": [
