@@ -1,15 +1,19 @@
 fastapi
 uvicorn
-spacy==3.8.11
-rapidfuzz
 python-dotenv
 python-multipart
-text-anonymizer
 httpx
 mypy
 PyMuPDF
 pymupdf-layout
 pymupdf4llm
+openai
+google-genai
 #en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0.tar.gz
 #sentence-transformers
 #torch
+#transformers
+#hf_xet
+#spacy==3.8.11
+#rapidfuzz
+#text-anonymizer
